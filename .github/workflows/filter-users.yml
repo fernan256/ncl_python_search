@@ -1,0 +1,181 @@
+name: Filter Users by Age
+
+on:
+  push:
+    branches: [ main, feature/create-script ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  filter-users:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Validate required files
+      run: python3 .github/scripts/validate_files.py
+        
+    - name: Read configuration
+      id: read_config
+      run: |
+        AGE_MIN=$(python3 .github/scripts/read_config.py)
+        echo "age_minimum=$AGE_MIN" >> $GITHUB_OUTPUT
+        
+    - name: Setup build directory
+      run: |
+        mkdir -p build
+        echo "📁 Created build directory for artifacts"
+        
+    - name: Run user filtering
+      id: filter_users
+      run: |
+        # Generate timestamp for unique artifact naming
+        TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+        echo "⏰ Timestamp: $TIMESTAMP"
+        
+        AGE_MIN="${{ steps.read_config.outputs.age_minimum }}"
+        
+        # Define output path in build directory
+        OUTPUT_FILE="build/filtered_users_age${AGE_MIN}_${TIMESTAMP}.json"
+        echo "📋 Output file: $OUTPUT_FILE"
+        
+        # Make Python script executable and run it
+        chmod +x filter_users_by_age.py
+        echo "🚀 Running: python3 filter_users_by_age.py users.json $AGE_MIN -o $OUTPUT_FILE"
+        python3 filter_users_by_age.py users.json "$AGE_MIN" -o "$OUTPUT_FILE"
+        
+        # Count filtered users
+        FILTERED_COUNT=$(python3 .github/scripts/count_users.py "$OUTPUT_FILE")
+        
+        echo "filtered_count=$FILTERED_COUNT" >> $GITHUB_OUTPUT
+        echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+        echo "output_file=$OUTPUT_FILE" >> $GITHUB_OUTPUT
+
+    - name: Display results
+      run: |
+        echo "📊 Results:"
+        echo "   Timestamp: ${{ steps.filter_users.outputs.timestamp }}"
+        echo "   Age Minimum: ${{ steps.read_config.outputs.age_minimum }}"
+        echo "   Filtered Users: ${{ steps.filter_users.outputs.filtered_count }}"
+        echo "   Output File: ${{ steps.filter_users.outputs.output_file }}"
+        echo ""
+        echo "📄 Output file contents:"
+        cat "${{ steps.filter_users.outputs.output_file }}"
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: filtered-users-age${{ steps.read_config.outputs.age_minimum }}-${{ steps.filter_users.outputs.timestamp }}
+        path: ${{ steps.filter_users.outputs.output_file }}
+        retention-days: 30
+        
+    - name: Send success notification email
+      if: success()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "✅ User Filtering Success - Age ${{ steps.read_config.outputs.age_minimum }}+ (${{ steps.filter_users.outputs.timestamp }})"
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: "GitHub Actions <${{ secrets.EMAIL_USERNAME }}>"
+        html_body: |
+          <h2>🎯 User Filtering Completed Successfully</h2>
+          <p>The user filtering workflow has completed successfully with the following results:</p>
+          
+          <table border="1" style="border-collapse: collapse; margin: 20px 0;">
+            <tr style="background-color: #f0f0f0;">
+              <td style="padding: 10px;"><strong>Repository</strong></td>
+              <td style="padding: 10px;">${{ github.repository }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Branch</strong></td>
+              <td style="padding: 10px;">${{ github.ref_name }}</td>
+            </tr>
+            <tr style="background-color: #f0f0f0;">
+              <td style="padding: 10px;"><strong>Commit</strong></td>
+              <td style="padding: 10px;">${{ github.sha }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Age Filter</strong></td>
+              <td style="padding: 10px;">≥ ${{ steps.read_config.outputs.age_minimum }} years</td>
+            </tr>
+            <tr style="background-color: #f0f0f0;">
+              <td style="padding: 10px;"><strong>Users Found</strong></td>
+              <td style="padding: 10px;">${{ steps.filter_users.outputs.filtered_count }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Timestamp</strong></td>
+              <td style="padding: 10px;">${{ steps.filter_users.outputs.timestamp }}</td>
+            </tr>
+            <tr style="background-color: #f0f0f0;">
+              <td style="padding: 10px;"><strong>Artifact Name</strong></td>
+              <td style="padding: 10px;">filtered-users-age${{ steps.read_config.outputs.age_minimum }}-${{ steps.filter_users.outputs.timestamp }}</td>
+            </tr>
+          </table>
+          
+          <p><strong>📁 Artifact Download:</strong><br>
+          You can download the filtered results from the <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">GitHub Actions run page</a>.</p>
+          
+          <p><em>This notification was sent from GitHub Actions workflow: ${{ github.workflow }}</em></p>
+          
+    - name: Send failure notification email
+      if: failure()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: "❌ User Filtering Failed - ${{ github.repository }} (${{ github.ref_name }})"
+        to: ${{ secrets.NOTIFICATION_EMAIL }}
+        from: "GitHub Actions <${{ secrets.EMAIL_USERNAME }}>"
+        html_body: |
+          <h2>❌ User Filtering Workflow Failed</h2>
+          <p>The user filtering workflow has failed. Please check the details below and review the logs.</p>
+          
+          <table border="1" style="border-collapse: collapse; margin: 20px 0;">
+            <tr style="background-color: #ffe6e6;">
+              <td style="padding: 10px;"><strong>Repository</strong></td>
+              <td style="padding: 10px;">${{ github.repository }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Branch</strong></td>
+              <td style="padding: 10px;">${{ github.ref_name }}</td>
+            </tr>
+            <tr style="background-color: #ffe6e6;">
+              <td style="padding: 10px;"><strong>Commit</strong></td>
+              <td style="padding: 10px;">${{ github.sha }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Workflow</strong></td>
+              <td style="padding: 10px;">${{ github.workflow }}</td>
+            </tr>
+            <tr style="background-color: #ffe6e6;">
+              <td style="padding: 10px;"><strong>Run ID</strong></td>
+              <td style="padding: 10px;">${{ github.run_id }}</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px;"><strong>Triggered By</strong></td>
+              <td style="padding: 10px;">${{ github.actor }}</td>
+            </tr>
+          </table>
+          
+          <p><strong>🔍 Troubleshooting Steps:</strong></p>
+          <ul>
+            <li>Check that <code>config.json</code> exists with valid <code>ageMinimun</code> value</li>
+            <li>Verify <code>users.json</code> contains valid user data</li>
+            <li>Ensure <code>filter_users_by_age.py</code> script is present</li>
+            <li>Review the <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">workflow logs</a> for detailed error messages</li>
+          </ul>
+          
+          <p><em>This failure notification was sent from GitHub Actions workflow: ${{ github.workflow }}</em></p>
